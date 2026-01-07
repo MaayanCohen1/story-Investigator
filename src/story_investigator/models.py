@@ -1,6 +1,6 @@
 """Data models for Story Investigator."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Message(BaseModel):
@@ -13,10 +13,9 @@ class Message(BaseModel):
         original_xml: The original XML snippet for evidence tracking.
     """
     
+    model_config = ConfigDict(frozen=True)
+    
     sender: str = Field(..., description="Sender identifier from XML ref attribute")
     receiver: str = Field(..., description="Receiver identifier from XML ref attribute")
     body: str = Field(..., description="Message body text")
     original_xml: str = Field(..., description="Original XML snippet for evidence")
-
-    class Config:
-        frozen = True  # Make Message immutable

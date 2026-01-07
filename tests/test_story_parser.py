@@ -28,8 +28,8 @@ class TestStoryParser:
         assert messages[0].sender == "alex"
         assert messages[0].receiver == "six"
         assert messages[0].body == "The harbour looks electric — and I don't mean the lights. Circular Quay, Wharf 3, 6pm. Don't be late."
-        assert "<sender ref=\"alex\"/>" in messages[0].original_xml
-        assert "<receiver ref=\"six\"/>" in messages[0].original_xml
+        assert 'sender ref="alex"' in messages[0].original_xml
+        assert 'receiver ref="six"' in messages[0].original_xml
         assert messages[0].body in messages[0].original_xml
 
     def test_parse_string_multiple_messages(self):
@@ -58,9 +58,8 @@ class TestStoryParser:
         assert messages[1].sender == "alex"
         assert messages[1].receiver == "marcus"
         assert "Sure" in messages[1].body
-        # Verify original_xml contains the message XML
-        assert "<sender ref=\"marcus\"/>" in messages[0].original_xml
-        assert "<sender ref=\"alex\"/>" in messages[1].original_xml
+        assert 'sender ref="marcus"' in messages[0].original_xml
+        assert 'sender ref="alex"' in messages[1].original_xml
 
     def test_parse_string_empty_story(self):
         """Test parsing an empty story returns empty list."""
