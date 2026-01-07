@@ -45,7 +45,10 @@ class MessageChunker:
             if not chunk_messages:
                 break
             
-            combined_text = "\n".join(msg.body for msg in chunk_messages)
+            combined_text = "\n".join(
+                f"[{msg.sender}] to [{msg.receiver}]: {msg.body}"
+                for msg in chunk_messages
+            )
             
             chunk = MessageChunk(
                 messages=chunk_messages,

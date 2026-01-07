@@ -1,14 +1,22 @@
 """Command-line interface for Story Investigator."""
 
+import logging
 import sys
 
 from story_investigator.config import load_config
+from story_investigator.engines.light_rag_engine import LightRAGInvestigator
 from story_investigator.engines.naive_rag import NaiveRAGInvestigator
+from story_investigator.errors import PromptTooLongError
 from story_investigator.llm_client import LLMClient
 from story_investigator.prompt_manager import PromptManager
 from story_investigator.retrieval.chunking import MessageChunker
 from story_investigator.retrieval.embeddings import EmbeddingEngine
 from story_investigator.retrieval.vector_store import VectorStore
+
+logging.basicConfig(
+    level=logging.WARNING,  # Only show warnings and errors, not INFO logs
+    format='%(levelname)s: %(message)s'
+)
 
 
 def main():
@@ -16,25 +24,38 @@ def main():
     config = load_config()
 
     prompt_manager = PromptManager(max_length=config.max_prompt_length)
-    embedding_engine = EmbeddingEngine(model_name=config.embedding_model)
-    vector_store = VectorStore(dimension=384)
-    chunker = MessageChunker(chunk_size=config.chunk_size, overlap=config.chunk_overlap)
-    llm_client = LLMClient(
-        api_key=config.openai_api_key,
-        model=config.llm_model,
-        temperature=config.llm_temperature,
-        prompt_manager=prompt_manager,
-    )
 
-    investigator = NaiveRAGInvestigator(
-        story_path=str(config.story_path),
-        embedding_engine=embedding_engine,
-        vector_store=vector_store,
-        chunker=chunker,
-        prompt_manager=prompt_manager,
-        llm_client=llm_client,
-        top_k=config.top_k,
-    )
+    engine_choice = config.rag_engine.lower()
+    if engine_choice not in {"naive", "lightrag"}:
+        engine_choice = input("Choose engine [naive/lightrag] (default naive): ").strip().lower() or "naive"
+
+    if engine_choice == "lightrag":
+        investigator = LightRAGInvestigator(
+            story_path=str(config.story_path),
+            prompt_manager=prompt_manager,
+            llm_model=config.llm_model,
+            llm_temperature=config.llm_temperature,
+        )
+    else:
+        embedding_engine = EmbeddingEngine(model_name=config.embedding_model)
+        vector_store = VectorStore(dimension=384)
+        chunker = MessageChunker(chunk_size=config.chunk_size, overlap=config.chunk_overlap)
+        llm_client = LLMClient(
+            api_key=config.openai_api_key,
+            model=config.llm_model,
+            temperature=config.llm_temperature,
+            prompt_manager=prompt_manager,
+        )
+
+        investigator = NaiveRAGInvestigator(
+            story_path=str(config.story_path),
+            embedding_engine=embedding_engine,
+            vector_store=vector_store,
+            chunker=chunker,
+            prompt_manager=prompt_manager,
+            llm_client=llm_client,
+            top_k=config.top_k,
+        )
 
     try:
         investigator.load_story(str(config.story_path))
@@ -57,14 +78,28 @@ def main():
         if not question:
             continue
 
-        answer = investigator.ask(question)
-        print(answer.answer_text)
-        if answer.evidence_xml_snippets:
-            print("Here are some of the lines that show it:")
-            for snippet in answer.evidence_xml_snippets:
-                print(snippet)
-        else:
-            print("No evidence snippets available.")
+        try:
+            answer = investigator.ask(question)
+            print(answer.answer_text)
+            
+            if answer.evidence_xml_snippets:
+                total_snippets = len(answer.evidence_xml_snippets)
+                max_display = 3
+                
+                print("\nHere are some of the lines that show it:")
+                for snippet in answer.evidence_xml_snippets[:max_display]:
+                    print(snippet)
+                
+                if total_snippets > max_display:
+                    remaining = total_snippets - max_display
+                    print(f"\n(... and {remaining} more snippets found)")
+            else:
+                print("No evidence snippets available.")
+                
+        except PromptTooLongError:
+            print("\nThe story context for this question is too long. Try being more specific.")
+        except Exception as exc:
+            print(f"\nAn error occurred: {exc}")
 
 
 if __name__ == "__main__":

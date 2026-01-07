@@ -1,24 +1,47 @@
+"""Custom exceptions for the Story Investigator application."""
+
+
 class StoryInvestigatorError(Exception):
-    """Base exception for the story-Investigator project."""
-    pass
+    """Base exception for all Story Investigator errors."""
+    
+    def __init__(self, message: str = ""):
+        self.message = message
+        super().__init__(message)
+
 
 class PromptTooLongError(StoryInvestigatorError):
-    """Raised when the prompt exceeds the character limit (3000 chars)."""
-    pass
+    """Raised when a prompt exceeds the maximum allowed length."""
+    
+    def __init__(self, prompt_length: int, max_length: int):
+        self.prompt_length = prompt_length
+        self.max_length = max_length
+        message = f"Prompt length ({prompt_length}) exceeds maximum allowed length ({max_length})"
+        super().__init__(message)
+
 
 class StoryParseError(StoryInvestigatorError):
-    """Raised when XML parsing fails."""
-    pass
+    """Raised when the story file cannot be parsed."""
+    
+    def __init__(self, message: str = ""):
+        super().__init__(message)
+
 
 class EmbeddingError(StoryInvestigatorError):
     """Raised when embedding generation fails."""
-    pass
+    
+    def __init__(self, message: str = ""):
+        super().__init__(message)
+
 
 class RetrievalError(StoryInvestigatorError):
-    """Raised when vector search fails."""
-    pass
+    """Raised when retrieval fails."""
+    
+    def __init__(self, message: str = ""):
+        super().__init__(message)
 
-# השגיאה שהייתה חסרה לך:
+
 class LLMClientError(StoryInvestigatorError):
-    """Raised when the LLM API call fails."""
-    pass
+    """Raised when the LLM client encounters an error."""
+    
+    def __init__(self, message: str = ""):
+        super().__init__(message)

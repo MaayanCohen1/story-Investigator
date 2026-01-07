@@ -11,13 +11,14 @@ from dotenv import load_dotenv
 class AppConfig:
     openai_api_key: str
     story_path: Path
+    rag_engine: str = "naive"  # naive or lightrag
     embedding_model: str = "all-MiniLM-L6-v2"
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.0
     max_prompt_length: int = 3000
     chunk_size: int = 5
     chunk_overlap: int = 1
-    top_k: int = 3
+    top_k: int = 7  # Retrieve more chunks, then dynamically fit to prompt limit
 
 
 def load_config(env_path: str | None = None) -> AppConfig:
@@ -33,11 +34,12 @@ def load_config(env_path: str | None = None) -> AppConfig:
     return AppConfig(
         openai_api_key=openai_api_key or "",
         story_path=story_path,
+        rag_engine=os.getenv("RAG_ENGINE", "naive"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
         llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
         llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.0")),
         max_prompt_length=int(os.getenv("MAX_PROMPT_LENGTH", "3000")),
         chunk_size=int(os.getenv("CHUNK_SIZE", "5")),
         chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "1")),
-        top_k=int(os.getenv("TOP_K", "3")),
+        top_k=int(os.getenv("TOP_K", "7")),
     )

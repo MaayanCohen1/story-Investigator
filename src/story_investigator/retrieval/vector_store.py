@@ -6,7 +6,7 @@ import faiss
 import numpy as np
 
 from story_investigator.errors import RetrievalError
-from story_investigator.models import Message
+from story_investigator.models import MessageChunk
 
 
 class VectorStore:
@@ -20,21 +20,21 @@ class VectorStore:
         """
         self.dimension = dimension
         self.index = faiss.IndexFlatL2(dimension)
-        self.messages: List[Message] = []
+        self.chunks: List[MessageChunk] = []
 
-    def add_messages(self, messages: List[Message], vectors: np.ndarray) -> None:
-        """Add messages and their corresponding vectors to the store.
+    def add_chunks(self, chunks: List[MessageChunk], vectors: np.ndarray) -> None:
+        """Add chunks and their corresponding vectors to the store.
         
         Args:
-            messages: List of Message objects to store.
-            vectors: NumPy array of shape (n_messages, dimension) containing embeddings.
+            chunks: List of MessageChunk objects to store.
+            vectors: NumPy array of shape (n_chunks, dimension) containing embeddings.
             
         Raises:
             RetrievalError: If dimensions don't match or array shape is invalid.
         """
-        if len(messages) != vectors.shape[0]:
+        if len(chunks) != vectors.shape[0]:
             raise RetrievalError(
-                f"Number of messages ({len(messages)}) doesn't match number of vectors ({vectors.shape[0]})"
+                f"Number of chunks ({len(chunks)}) doesn't match number of vectors ({vectors.shape[0]})"
             )
         
         if vectors.shape[1] != self.dimension:
@@ -48,17 +48,17 @@ class VectorStore:
             vectors = vectors.astype(np.float32)
         
         self.index.add(vectors)
-        self.messages.extend(messages)
+        self.chunks.extend(chunks)
 
-    def search(self, query_vector: np.ndarray, k: int = 5) -> List[Tuple[Message, float]]:
-        """Search for k most similar messages.
+    def search(self, query_vector: np.ndarray, k: int = 5) -> List[Tuple[MessageChunk, float]]:
+        """Search for k most similar chunks.
         
         Args:
             query_vector: Query embedding vector of shape (dimension,) or (1, dimension).
-            k: Number of similar messages to retrieve.
+            k: Number of similar chunks to retrieve.
             
         Returns:
-            List of tuples (Message, distance) sorted by similarity (lowest distance first).
+            List of tuples (MessageChunk, distance) sorted by similarity (lowest distance first).
             
         Raises:
             RetrievalError: If store is empty, dimension mismatch, or search fails.
@@ -85,8 +85,8 @@ class VectorStore:
             distances, indices = self.index.search(query_vector, k)
             results = []
             for i, idx in enumerate(indices[0]):
-                if idx < len(self.messages):
-                    results.append((self.messages[idx], float(distances[0][i])))
+                if idx < len(self.chunks):
+                    results.append((self.chunks[idx], float(distances[0][i])))
             return results
         except Exception as e:
             raise RetrievalError(f"Search failed: {e}") from e
