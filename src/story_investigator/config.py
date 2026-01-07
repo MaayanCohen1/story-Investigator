@@ -13,7 +13,7 @@ class AppConfig:
     story_path: Path
     rag_engine: str = "naive"  # naive or lightrag
     embedding_model: str = "all-MiniLM-L6-v2"
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-4o-mini"  # Full gpt-4o for LightRAG entity extraction
     llm_temperature: float = 0.0
     max_prompt_length: int = 3000
     chunk_size: int = 5
@@ -36,7 +36,7 @@ def load_config(env_path: str | None = None) -> AppConfig:
         story_path=story_path,
         rag_engine=os.getenv("RAG_ENGINE", "naive"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
-        llm_model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+        llm_model=os.getenv("LLM_MODEL", "gpt-4o"),
         llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.0")),
         max_prompt_length=int(os.getenv("MAX_PROMPT_LENGTH", "3000")),
         chunk_size=int(os.getenv("CHUNK_SIZE", "5")),

@@ -1,6 +1,8 @@
 """Command-line interface for Story Investigator."""
 
+import asyncio
 import logging
+import os
 import sys
 
 from story_investigator.config import load_config
@@ -19,9 +21,13 @@ logging.basicConfig(
 )
 
 
-def main():
+async def main():
     """Main entry point for the CLI."""
     config = load_config()
+    
+    # Ensure OPENAI_API_KEY is set in environment for LightRAG
+    if config.openai_api_key:
+        os.environ["OPENAI_API_KEY"] = config.openai_api_key
 
     prompt_manager = PromptManager(max_length=config.max_prompt_length)
 
@@ -36,6 +42,8 @@ def main():
             llm_model=config.llm_model,
             llm_temperature=config.llm_temperature,
         )
+        # Initialize LightRAG asynchronously
+        await investigator.initialize()
     else:
         embedding_engine = EmbeddingEngine(model_name=config.embedding_model)
         vector_store = VectorStore(dimension=384)
@@ -58,7 +66,10 @@ def main():
         )
 
     try:
-        investigator.load_story(str(config.story_path))
+        if engine_choice == "lightrag":
+            await investigator.load_story(str(config.story_path))
+        else:
+            investigator.load_story(str(config.story_path))
     except FileNotFoundError:
         print(f"Story file not found at {config.story_path}")
         sys.exit(1)
@@ -79,7 +90,10 @@ def main():
             continue
 
         try:
-            answer = investigator.ask(question)
+            if engine_choice == "lightrag":
+                answer = await investigator.ask(question)
+            else:
+                answer = investigator.ask(question)
             print(answer.answer_text)
             
             if answer.evidence_xml_snippets:
@@ -103,5 +117,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 

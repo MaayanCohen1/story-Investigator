@@ -7,7 +7,7 @@ An AI-powered investigation tool that answers questions about story data using m
 - **Console-based Q&A**: Interactive CLI for investigating story messages
 - **Multiple RAG Systems**: Compare three different retrieval approaches
   - `naive_rag.py`: Custom vector-based chunking and retrieval
-  - `lightrag_engine.py`: LightRAG integration
+  - `light_rag_engine.py`: LightRAG integration with graph-based knowledge extraction
   - `nano_graphrag_engine.py`: nano-graphrag integration
 - **Evidence-Based Answers**: Every answer includes XML snippets showing the source
 - **Prompt Safety**: Hard 3000-character limit on LLM prompts with exception handling
@@ -65,16 +65,13 @@ pytest
 
 ### Run with specific RAG engine
 
-```bash
-# Naive RAG
-python -m story_investigator.cli --engine naive
-
-# LightRAG
-python -m story_investigator.cli --engine lightrag
-
-# nano-graphrag
-python -m story_investigator.cli --engine nano_graphrag
+Set `RAG_ENGINE` in your `.env` file:
 ```
+RAG_ENGINE=naive     # Use custom vector-based RAG
+RAG_ENGINE=lightrag  # Use LightRAG with knowledge graph
+```
+
+Or the CLI will prompt you to choose.
 
 ## Architecture
 

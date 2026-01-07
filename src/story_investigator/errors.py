@@ -12,10 +12,11 @@ class StoryInvestigatorError(Exception):
 class PromptTooLongError(StoryInvestigatorError):
     """Raised when a prompt exceeds the maximum allowed length."""
     
-    def __init__(self, prompt_length: int, max_length: int):
+    def __init__(self, prompt_length: int = 0, max_length: int = 3000, message: str = ""):
         self.prompt_length = prompt_length
         self.max_length = max_length
-        message = f"Prompt length ({prompt_length}) exceeds maximum allowed length ({max_length})"
+        if not message:
+            message = f"Prompt length ({prompt_length}) exceeds maximum allowed length ({max_length})"
         super().__init__(message)
 
 
