@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "story_investigator"
+version = "0.1.0"
+description = "AI Story Investigator using RAG and TDD"
+dependencies = [
+    "openai",
+    "pydantic",
+    "pytest",
+    "sentence-transformers",
+    "faiss-cpu",
+    "python-dotenv",
+    "lightrag-hku",
+    "nano-graphrag"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
