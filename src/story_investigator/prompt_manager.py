@@ -34,5 +34,31 @@ class PromptManager:
         Raises:
             PromptTooLongError: If prompt length exceeds max_length.
         """
-        raise NotImplementedError("This method must be implemented as part of TDD cycle")
+        if prompt is None:
+            raise PromptTooLongError(prompt_length=0, max_length=self.max_length)
+        prompt_length = len(prompt)
+        if prompt_length > self.max_length:
+            raise PromptTooLongError(prompt_length=prompt_length, max_length=self.max_length)
+        return True
+
+    def build_prompt(self, question: str, context: str = "") -> str:
+        """Build a prompt from a question and optional context.
+        
+        Args:
+            question: The user's question.
+            context: Optional context (e.g., retrieved story chunks).
+            
+        Returns:
+            Formatted prompt string that includes question and context.
+            
+        Raises:
+            PromptTooLongError: If the resulting prompt exceeds max_length.
+        """
+        base_prompt = (
+            f"Answer the following question based only on the provided context. "
+            f"If the answer is not in the context, say you don't know.\n\n"
+            f"Context:\n{context}\n\nQuestion: {question}"
+        )
+        self.validate_prompt(base_prompt)
+        return base_prompt
 

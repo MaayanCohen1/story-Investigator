@@ -1,22 +1,24 @@
-"""Custom exceptions for the Story Investigator application."""
-
-
-class PromptTooLongError(Exception):
-    """Raised when a prompt exceeds the maximum allowed length."""
+class StoryInvestigatorError(Exception):
+    """Base exception for the story-Investigator project."""
     pass
 
-
-class StoryParseError(Exception):
-    """Raised when the story file cannot be parsed."""
+class PromptTooLongError(StoryInvestigatorError):
+    """Raised when the prompt exceeds the character limit (3000 chars)."""
     pass
 
+class StoryParseError(StoryInvestigatorError):
+    """Raised when XML parsing fails."""
+    pass
 
-class EmbeddingError(Exception):
+class EmbeddingError(StoryInvestigatorError):
     """Raised when embedding generation fails."""
     pass
 
-
-class RetrievalError(Exception):
-    """Raised when retrieval fails."""
+class RetrievalError(StoryInvestigatorError):
+    """Raised when vector search fails."""
     pass
 
+# השגיאה שהייתה חסרה לך:
+class LLMClientError(StoryInvestigatorError):
+    """Raised when the LLM API call fails."""
+    pass

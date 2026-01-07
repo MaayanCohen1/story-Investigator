@@ -8,6 +8,7 @@ import numpy as np
 from story_investigator.investigator_base import BaseInvestigator
 from story_investigator.models import Answer, Message, MessageChunk
 from story_investigator.prompt_manager import PromptManager
+from story_investigator.llm_client import LLMClient
 from story_investigator.retrieval.chunking import MessageChunker
 from story_investigator.retrieval.embeddings import EmbeddingEngine
 from story_investigator.retrieval.vector_store import VectorStore
@@ -24,6 +25,7 @@ class NaiveRAGInvestigator(BaseInvestigator):
         vector_store: VectorStore,
         chunker: MessageChunker,
         prompt_manager: PromptManager,
+        llm_client: LLMClient,
         top_k: int = 3,
     ):
         """Initialize Naive RAG investigator.
@@ -41,6 +43,7 @@ class NaiveRAGInvestigator(BaseInvestigator):
         self.vector_store = vector_store
         self.chunker = chunker
         self.prompt_manager = prompt_manager
+        self.llm_client = llm_client
         self.top_k = top_k
         self.messages: List[Message] = []
         self.chunks: List[MessageChunk] = []
@@ -134,15 +137,27 @@ class NaiveRAGInvestigator(BaseInvestigator):
         context = "\n\n".join(context_texts)
         
         try:
-            prompt = self.prompt_manager.build_prompt(question=question, context=context)
+            instructions = (
+            "You are a professional investigator. Your task is to answer the user's question "
+            "based ONLY on the provided context below. If the information needed to answer "
+            "is not present in the context, state clearly that you do not know."
+            )
+            prompt = (
+            f"{instructions}\n\n"
+            f"<Context>\n{context}\n</Context>\n\n"
+            f"Question: {question}"
+            )
+            # Enforce prompt length limit before LLM call
+            self.prompt_manager.validate_prompt(prompt)
+            answer_text = self.llm_client.generate_answer(prompt)
         except Exception as e:
             return Answer(
-                answer_text=f"Error preparing prompt: {str(e)}",
+                answer_text=f"Error preparing or generating answer: {str(e)}",
                 evidence_xml_snippets=evidence_xml_snippets
             )
         
         return Answer(
-            answer_text=f"Prompt prepared successfully. Context length: {len(context)} characters.",
+            answer_text=answer_text,
             evidence_xml_snippets=evidence_xml_snippets
         )
 
