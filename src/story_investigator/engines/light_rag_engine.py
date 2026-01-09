@@ -20,19 +20,34 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from lightrag import LightRAG, QueryParam
-from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
+from lightrag.llm.openai import openai_complete_if_cache, openai_embed
 
 from story_investigator.errors import PromptTooLongError
 from story_investigator.investigator_base import BaseInvestigator
 from story_investigator.llm_client import LLMClient
 from story_investigator.models import Answer, Message
 from story_investigator.prompt_manager import PromptManager
+from story_investigator.retrieval.embeddings import EmbeddingEngine
 from story_investigator.story_parser import StoryParser
 
 logger = logging.getLogger(__name__)
+
+
+# Custom LLM function for LightRAG using gpt-5-mini
+async def gpt_5_mini_complete(
+    prompt, system_prompt=None, history_messages=[], **kwargs
+) -> str:
+    """Wrapper for LightRAG to use gpt-5-mini model."""
+    return await openai_complete_if_cache(
+        "gpt-5-mini",
+        prompt,
+        system_prompt=system_prompt,
+        history_messages=history_messages,
+        **kwargs
+    )
 
 
 class LightRAGInvestigator(BaseInvestigator):
@@ -42,11 +57,12 @@ class LightRAGInvestigator(BaseInvestigator):
         self,
         story_path: str,
         prompt_manager: PromptManager,
-        llm_model: str = "gpt-4o-mini",
+        llm_model: str = "gpt-5-mini",
         llm_temperature: float = 0.0,
         working_dir: str = "./lightrag_db",
         top_k: int = 10,  # Reduced from 60 to avoid over-retrieval
         chunk_top_k: int = 5,  # Reduced from 20 to avoid over-retrieval
+        embedding_model: str = "text-embedding-3-small",
     ):
         """Initialize LightRAG investigator.
         
@@ -58,6 +74,8 @@ class LightRAGInvestigator(BaseInvestigator):
             working_dir: Directory for LightRAG storage.
             top_k: Number of top entities/relations to retrieve (default: 10).
             chunk_top_k: Number of top chunks to retrieve per entity (default: 5).
+            embedding_model: OpenAI embedding model for reranking (default: text-embedding-3-small).
+                           MUST match LightRAG's embedding space for consistent ranking.
         """
         self.story_path = Path(story_path)
         self.prompt_manager = prompt_manager
@@ -72,6 +90,11 @@ class LightRAGInvestigator(BaseInvestigator):
         self.llm_client: Optional[LLMClient] = None
         self._initialized = False
         self._indexed = False
+        
+        # Initialize OpenAI embedding engine for reranking
+        # IMPORTANT: Uses same embedding space as LightRAG (openai_embed)
+        self.embedding_engine = EmbeddingEngine(model_name=embedding_model)
+        logger.info(f"Initialized embedding engine with model: {embedding_model}")
 
     async def initialize(self) -> None:
         """Initialize LightRAG instance and LLM client.
@@ -89,7 +112,7 @@ class LightRAGInvestigator(BaseInvestigator):
         # LightRAG uses these for building its knowledge graph during indexing
         self.rag = LightRAG(
             working_dir=str(self.working_dir),
-            llm_model_func=gpt_4o_mini_complete,
+            llm_model_func=gpt_5_mini_complete,
             embedding_func=openai_embed,
             embedding_batch_num=16,
         )
@@ -191,96 +214,281 @@ class LightRAGInvestigator(BaseInvestigator):
         
         return result if result else ""
 
-    def _compute_relevance_score(self, message: Message, question: str, context: str) -> float:
-        """Compute relevance score for a message given a question and context.
-        
-        Uses multiple signals:
-        1. Presence in LightRAG context (weighted highest)
-        2. Multiple important keywords together (strong signal)
-        3. Sender/receiver mentioned in context
-        4. Keyword overlap with question
+    def _compute_cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """Compute cosine similarity between two embedding vectors.
         
         Args:
-            message: Message to score.
-            question: User's question.
-            context: Retrieved context from LightRAG.
+            vec1: First embedding vector.
+            vec2: Second embedding vector.
             
         Returns:
-            Relevance score (higher = more relevant).
+            Cosine similarity score (0 to 1, higher = more similar).
         """
-        score = 0.0
+        import numpy as np
+        v1 = np.array(vec1, dtype=np.float32)
+        v2 = np.array(vec2, dtype=np.float32)
         
-        question_lower = question.lower()
-        body_lower = message.body.lower()
-        context_lower = context.lower()
+        dot_product = np.dot(v1, v2)
+        norm_product = np.linalg.norm(v1) * np.linalg.norm(v2)
         
-        # Extract important keywords from question (not stopwords)
-        stopwords = {'what', 'who', 'when', 'where', 'how', 'why', 'the', 'a', 'an', 
-                     'that', 'this', 'with', 'to', 'from', 'in', 'on', 'at', 'is', 'are'}
-        question_words = set(question_lower.split())
-        important_keywords = [w for w in question_words if len(w) > 2 and w not in stopwords]
+        if norm_product == 0:
+            return 0.0
         
-        # Signal 1: Multiple important keywords appear together in message body (STRONGEST)
-        keywords_in_body = [kw for kw in important_keywords if kw in body_lower]
-        if len(keywords_in_body) >= 2:
-            score += 50.0 * len(keywords_in_body)  # Very strong signal
-        elif len(keywords_in_body) == 1:
-            score += 15.0
-        
-        # Signal 2: Message body appears in LightRAG context (strong signal)
-        # Check for substantial overlap, not just a single word
-        if len(body_lower) > 20 and body_lower[:50] in context_lower:
-            score += 20.0
-        
-        # Signal 3: Sender/receiver mentioned in LightRAG context
-        if message.sender.lower() in context_lower:
-            score += 5.0
-        if message.receiver.lower() in context_lower:
-            score += 3.0
-        
-        # Signal 4: General keyword overlap
-        body_words = set(body_lower.split())
-        overlap = question_words & body_words
-        score += len(overlap) * 1.0
-        
-        return score
+        return float(dot_product / norm_product)
     
-    def _extract_evidence_from_context(self, context: str, question: str, max_snippets: int = 10) -> List[str]:
-        """Extract and rank evidence snippets from retrieved context.
+    def _rank_messages_by_embedding(self, question: str, messages: List[Message]) -> List[Tuple[float, Message]]:
+        """Rank messages by OpenAI embedding similarity to question.
         
-        IMPROVED VERSION (v1.1): Instead of naive matching, we:
-        1. Find all candidate messages (those mentioned in context or relevant to question)
-        2. Score each by relevance using multiple signals
-        3. Return top-ranked messages up to max_snippets
+        VERSION 3.0 (OpenAI Embeddings):
+        - Uses OpenAI text-embedding-3-small (same space as LightRAG indexing)
+        - NO hardcoded keyword lists or manual heuristics
+        - General-purpose semantic similarity
         
         Args:
-            context: Retrieved context from LightRAG.
-            question: User's question (for relevance scoring).
-            max_snippets: Maximum number of evidence snippets to return.
+            question: User's question.
+            messages: List of candidate messages.
             
         Returns:
-            List of original XML snippets, ordered by relevance (most relevant first).
+            List of (similarity_score, message) tuples, sorted by score descending.
         """
-        # Score all messages by relevance
-        scored_messages = []
-        for message in self.messages:
-            score = self._compute_relevance_score(message, question, context)
-            if score > 0:  # Only include messages with some relevance
-                scored_messages.append((score, message))
+        # Get question embedding
+        question_embedding = self.embedding_engine.embed_text(question)
         
-        # Sort by score (descending)
+        # Prepare message texts for batch embedding
+        message_texts = [
+            f"{msg.sender} to {msg.receiver}: {msg.body}"
+            for msg in messages
+        ]
+        
+        # Get all message embeddings in batch (uses caching internally)
+        message_embeddings = self.embedding_engine.embed_texts(message_texts)
+        
+        # Compute similarities
+        scored_messages = []
+        for message, msg_embedding in zip(messages, message_embeddings):
+            similarity = self._compute_cosine_similarity(question_embedding, msg_embedding)
+            scored_messages.append((similarity, message))
+        
+        # Sort by similarity (descending)
         scored_messages.sort(key=lambda x: x[0], reverse=True)
         
-        # Take top-k and extract XML
+        logger.info(f"Top embedding similarities: {[f'{score:.3f}' for score, _ in scored_messages[:5]]}")
+        
+        return scored_messages
+    
+    def _find_response_to_message(self, message: Message, max_distance: int = 10) -> Optional[Message]:
+        """Find a response message from the receiver back to the sender.
+        
+        For investigative questions, this helps find responses to accusations/questions.
+        
+        Args:
+            message: The original message (e.g., an accusation).
+            max_distance: Maximum number of messages ahead to search.
+            
+        Returns:
+            The response message if found, None otherwise.
+        """
+        try:
+            idx = next(i for i, m in enumerate(self.messages) if m.message_id == message.message_id)
+        except StopIteration:
+            return None
+        
+        # Look ahead for a message where sender/receiver are swapped
+        for i in range(idx + 1, min(idx + max_distance + 1, len(self.messages))):
+            response_msg = self.messages[i]
+            if (response_msg.sender == message.receiver and 
+                response_msg.receiver == message.sender):
+                return response_msg
+        
+        return None
+    
+    def _select_evidence_messages_with_ids(self, context: str, question: str, max_messages: int = 20) -> List[Message]:
+        """Select and rank evidence messages using OPENAI EMBEDDING SIMILARITY.
+        
+        VERSION 3.0 (OpenAI Embeddings - No Keywords):
+        - Ranks ALL messages by OpenAI embedding similarity to question
+        - Uses same embedding space as LightRAG (text-embedding-3-small)
+        - For investigative questions, includes response pairs
+        - Budget-aware selection (fits within prompt limit)
+        - NO hardcoded keyword lists
+        
+        Args:
+            context: Retrieved context from LightRAG (unused in embedding-based approach).
+            question: User's question.
+            max_messages: Maximum number of messages to return.
+            
+        Returns:
+            List of Message objects, ranked by embedding similarity (most similar first).
+        """
+        # Detect investigative questions
+        question_lower = question.lower()
+        is_investigative = any(word in question_lower for word in 
+                              ["suspect", "suspicion", "accuse", "question", "doubt", "worry", "respond", "response", "react"])
+        
+        if is_investigative:
+            logger.info("Detected investigative question - will look for response pairs")
+        
+        # Rank ALL messages by embedding similarity
+        ranked_messages = self._rank_messages_by_embedding(question, self.messages)
+        
+        # Select top messages
+        selected_messages = []
+        seen_ids = set()
+        
+        for similarity, message in ranked_messages:
+            if len(selected_messages) >= max_messages:
+                break
+            
+            # Skip if below similarity threshold
+            if similarity < 0.1:
+                logger.debug(f"Skipping message {message.message_id} (similarity {similarity:.3f} too low)")
+                continue
+            
+            if message.message_id not in seen_ids:
+                selected_messages.append(message)
+                seen_ids.add(message.message_id)
+                logger.debug(f"Selected {message.message_id} (similarity: {similarity:.3f})")
+                
+                # For investigative questions with high-similarity messages,
+                # also look for direct responses to complete the narrative
+                if is_investigative and similarity > 0.4:
+                    response_msg = self._find_response_to_message(message, max_distance=10)
+                    if response_msg and response_msg.message_id not in seen_ids:
+                        if len(selected_messages) < max_messages:
+                            selected_messages.append(response_msg)
+                            seen_ids.add(response_msg.message_id)
+                            logger.info(f"Added response pair: {message.message_id} -> {response_msg.message_id}")
+        
+        logger.info(f"Selected {len(selected_messages)} messages via OpenAI embedding similarity")
+        
+        return selected_messages
+    
+    def _build_structured_prompt_with_ids(self, question: str, evidence_messages: List[Message]) -> str:
+        """Build a structured prompt that enforces exact output format with message IDs.
+        
+        VERSION 3.1 (Analytical Investigator):
+        - Includes investigative guidelines for chronological analysis
+        - Behavioral profiling and inconsistency detection
+        - Inference capabilities from behavioral changes
+        
+        The prompt instructs the LLM to return:
+        ANSWER: <name or UNKNOWN>
+        EVIDENCE_IDS: <comma-separated message IDs>
+        REASON: <explanation>
+        
+        Args:
+            question: User's question.
+            evidence_messages: List of Message objects with IDs.
+            
+        Returns:
+            Formatted prompt string.
+        """
+        # Build evidence section with message IDs and timestamps
+        evidence_parts = []
+        valid_ids = []
+        for msg in evidence_messages:
+            # Extract timestamp from original XML if present
+            timestamp = ""
+            ts_match = re.search(r'ts="([^"]+)"', msg.original_xml)
+            if ts_match:
+                timestamp = f" [Time: {ts_match.group(1)}]"
+            
+            evidence_parts.append(
+                f"[ID:{msg.message_id}]{timestamp} {msg.sender} → {msg.receiver}: {msg.body}"
+            )
+            valid_ids.append(msg.message_id)
+        
+        evidence_text = "\n\n".join(evidence_parts)
+        
+        # Detect question type for adaptive guidance
+        question_lower = question.lower()
+        if question_lower.startswith("who"):
+            answer_format = "<single name or UNKNOWN>"
+        elif question_lower.startswith(("why", "what", "how")):
+            answer_format = "<brief explanation (1-3 sentences) or UNKNOWN>"
+        else:
+            answer_format = "<brief answer or UNKNOWN>"
+        
+        prompt = f"""You are an expert AI Investigator analyzing a story told through messages. Answer based ONLY on the evidence below.
+
+INVESTIGATIVE GUIDELINES:
+1. CHRONOLOGICAL ANALYSIS: Messages have timestamps (if shown). Reconstruct the timeline - a sudden change in urgency or tone between messages may indicate suspicious behavior.
+2. BEHAVIORAL PROFILING: Look for:
+   - Contradictions between what someone says vs. does
+   - Sudden tone shifts (panic → calm, casual → urgent)
+   - Evasive or dismissive responses to direct questions
+3. INFERENCE: Behavioral inconsistencies ARE valid evidence of suspicion. A character avoiding a question or changing their story is evidence to cite.
+4. CITATIONS: You MUST back up claims with message IDs from the evidence.
+
+OUTPUT FORMAT (3 lines only):
+ANSWER: {answer_format}
+EVIDENCE_IDS: <comma-separated IDs like m12,m13 - ONLY from: {', '.join(valid_ids)}>
+REASON: <Explain your logic. If UNKNOWN, state why (not in story/not conclusive/ambiguous)>
+
+EVIDENCE MESSAGES:
+{evidence_text}
+
+QUESTION: {question}
+
+YOUR RESPONSE:"""
+        
+        return prompt
+    
+    def _parse_and_validate_llm_response(self, llm_response: str, evidence_messages: List[Message]) -> Answer:
+        """Parse and validate LLM response with strict format enforcement.
+        
+        Args:
+            llm_response: Raw response from LLM.
+            evidence_messages: List of messages that were provided as evidence.
+            
+        Returns:
+            Answer object with validated evidence IDs.
+        """
+        valid_ids = {msg.message_id for msg in evidence_messages}
+        id_to_message = {msg.message_id: msg for msg in evidence_messages}
+        
+        # Parse response
+        answer_text = "UNKNOWN"
+        evidence_ids = []
+        reason = "Failed to parse LLM response"
+        
+        lines = llm_response.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith("ANSWER:"):
+                answer_text = line.replace("ANSWER:", "").strip()
+            elif line.startswith("EVIDENCE_IDS:"):
+                ids_str = line.replace("EVIDENCE_IDS:", "").strip()
+                if ids_str:
+                    evidence_ids = [id.strip() for id in ids_str.split(',')]
+            elif line.startswith("REASON:"):
+                reason = line.replace("REASON:", "").strip()
+        
+        # Validate evidence IDs - they must be from the provided messages
+        validated_ids = []
+        for eid in evidence_ids:
+            if eid in valid_ids:
+                validated_ids.append(eid)
+            else:
+                logger.warning(f"LLM returned invalid evidence ID: {eid}")
+        
+        # If LLM hallucinated all IDs, treat as UNKNOWN
+        if evidence_ids and not validated_ids:
+            answer_text = "UNKNOWN"
+            reason = "Evidence IDs could not be validated"
+        
+        # Get XML snippets for validated IDs
         evidence_xml_snippets = []
-        seen_xml = set()
+        for eid in validated_ids:
+            if eid in id_to_message:
+                evidence_xml_snippets.append(id_to_message[eid].original_xml)
         
-        for score, message in scored_messages[:max_snippets]:
-            if message.original_xml not in seen_xml:
-                evidence_xml_snippets.append(message.original_xml)
-                seen_xml.add(message.original_xml)
-        
-        return evidence_xml_snippets
+        return Answer(
+            answer_text=answer_text,
+            evidence_ids=validated_ids,
+            evidence_xml_snippets=evidence_xml_snippets,
+            reason=reason
+        )
 
     def _build_prompt_with_limit(
         self, 
@@ -381,77 +589,57 @@ class LightRAGInvestigator(BaseInvestigator):
                 evidence_xml_snippets=[]
             )
         
-        # Step 2: Extract and rank evidence snippets based on retrieved context
-        # This uses relevance scoring to prioritize the most important messages
-        evidence_xml_snippets = self._extract_evidence_from_context(context, question, max_snippets=50)
+        # Step 2: Select evidence messages with IDs (prioritize multi-keyword matches)
+        evidence_messages = self._select_evidence_messages_with_ids(context, question, max_messages=20)
         
-        # Step 3: Build context from TOP RANKED evidence messages (budget-aware)
-        # Instead of using LightRAG's raw truncated context, we build our own
-        # from the most relevant messages that fit within our budget
-        relevant_context_parts = []
-        char_budget = 2500  # Leave room for instructions + question
-        
-        for evidence_xml in evidence_xml_snippets:
-            # Extract readable text from this message for context
-            # Parse sender, receiver, body from the XML (handle namespaces)
-            try:
-                # Simple extraction: find sender ref, receiver ref, and body
-                # Handle both with and without namespace prefixes (e.g., ns0:sender or sender)
-                sender_match = re.search(r'<(?:\w+:)?sender[^>]*ref="([^"]+)"', evidence_xml)
-                receiver_match = re.search(r'<(?:\w+:)?receiver[^>]*ref="([^"]+)"', evidence_xml)
-                body_match = re.search(r'<(?:\w+:)?body[^>]*>(.*?)</(?:\w+:)?body>', evidence_xml, re.DOTALL)
-                
-                if sender_match and receiver_match and body_match:
-                    sender = sender_match.group(1)
-                    receiver = receiver_match.group(1)
-                    body = body_match.group(1).strip()
-                    
-                    context_entry = f"[{sender}] to [{receiver}]: {body}"
-                    
-                    # Check if adding this would exceed budget
-                    if len("\n\n".join(relevant_context_parts + [context_entry])) <= char_budget:
-                        relevant_context_parts.append(context_entry)
-                    else:
-                        break  # Budget exhausted
-            except Exception as e:
-                logger.warning(f"Failed to parse evidence XML: {e}")
-                continue
-        
-        # Build context from selected evidence
-        selected_context = "\n\n".join(relevant_context_parts) if relevant_context_parts else context
-        
-        # Step 4: Build final prompt within the 3000 character limit
-        try:
-            prompt, truncated_context = self._build_prompt_with_limit(
-                question, 
-                selected_context,  # Use our curated context, not raw LightRAG context
-                max_chars=self.prompt_manager.max_length
-            )
-            logger.info(f"Prompt: {len(prompt)} chars from {len(evidence_xml_snippets)} evidence blocks ({len(relevant_context_parts)} used)")
-        except PromptTooLongError:
-            # If we can't fit even a truncated version, return error
+        if not evidence_messages:
             return Answer(
-                answer_text=(
-                    "The context required to answer this question is too large. "
-                    "Please try asking a more specific question."
-                ),
-                evidence_xml_snippets=evidence_xml_snippets[:10]  # Return top 10 evidence
+                answer_text="UNKNOWN",
+                evidence_ids=[],
+                evidence_xml_snippets=[],
+                reason="No relevant messages found in the story"
             )
         
-        # Step 4: Generate final answer using our LLM client
+        # Step 3: Build structured prompt with message IDs
+        prompt = self._build_structured_prompt_with_ids(question, evidence_messages)
+        
+        # Step 4: Validate prompt length
         try:
-            answer_text = self.llm_client.generate_answer(prompt)
+            self.prompt_manager.validate_prompt(prompt)
+            logger.info(f"Prompt: {len(prompt)} chars, {len(evidence_messages)} evidence messages")
+        except PromptTooLongError:
+            # Reduce number of messages and retry
+            evidence_messages = evidence_messages[:10]
+            prompt = self._build_structured_prompt_with_ids(question, evidence_messages)
+            try:
+                self.prompt_manager.validate_prompt(prompt)
+                logger.info(f"Prompt: {len(prompt)} chars (reduced to {len(evidence_messages)} messages)")
+            except PromptTooLongError:
+                return Answer(
+                    answer_text="UNKNOWN",
+                    evidence_ids=[],
+                    evidence_xml_snippets=[],
+                    reason="Question requires too much context to answer within prompt limit"
+                )
+        
+        # Step 5: Generate answer with strict format enforcement
+        logger.info(f"Sending prompt to LLM: {len(prompt)} characters (limit: 3000)")
+        try:
+            llm_response = self.llm_client.generate_answer(prompt)
+            logger.debug(f"LLM response: {llm_response}")
         except Exception as e:
             logger.error(f"Error generating answer: {e}")
             return Answer(
-                answer_text=f"Error generating answer: {str(e)}",
-                evidence_xml_snippets=evidence_xml_snippets
+                answer_text="UNKNOWN",
+                evidence_ids=[],
+                evidence_xml_snippets=[],
+                reason=f"LLM error: {str(e)}"
             )
         
-        return Answer(
-            answer_text=answer_text,
-            evidence_xml_snippets=evidence_xml_snippets
-        )
+        # Step 6: Parse and validate LLM response
+        answer = self._parse_and_validate_llm_response(llm_response, evidence_messages)
+        
+        return answer
 
     def ask_sync(self, question: str) -> Answer:
         """Synchronous wrapper for ask() to match BaseInvestigator interface.

@@ -15,7 +15,7 @@ class LLMClient:
     def __init__(
         self,
         api_key: Optional[str],
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5-mini",
         temperature: float = 0.0,
         prompt_manager: Optional[PromptManager] = None,
     ):

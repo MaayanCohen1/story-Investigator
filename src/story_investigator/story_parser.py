@@ -48,16 +48,19 @@ class StoryParser:
                     if sender_elem is None or receiver_elem is None or body_elem is None:
                         continue
                     
+                    # Extract message ID from the message element
+                    message_id = message_elem.get("id", "")
                     sender = sender_elem.get("ref", "")
                     receiver = receiver_elem.get("ref", "")
                     body = body_elem.text or ""
                     
-                    if not sender or not receiver:
+                    if not sender or not receiver or not message_id:
                         continue
                     
                     original_xml = ET.tostring(message_elem, encoding="unicode")
                     
                     message = Message(
+                        message_id=message_id,
                         sender=sender,
                         receiver=receiver,
                         body=body,

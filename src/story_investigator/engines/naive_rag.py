@@ -97,6 +97,7 @@ class NaiveRAGInvestigator(BaseInvestigator):
         if not self.chunks:
             return Answer(
                 answer_text="No story data available.",
+                evidence_ids=[],
                 evidence_xml_snippets=[]
             )
         
@@ -108,26 +109,18 @@ class NaiveRAGInvestigator(BaseInvestigator):
         if not search_results:
             return Answer(
                 answer_text="No relevant information found in the story.",
+                evidence_ids=[],
                 evidence_xml_snippets=[]
             )
         
         relevant_chunks = [chunk for chunk, _ in search_results]
         
-        # Separate context for LLM (clean text) from evidence (original XML)
-        evidence_xml_snippets = []
-        seen_xml = set()
-        
-        # Collect all evidence from relevant chunks
-        for chunk in relevant_chunks:
-            for message in chunk.messages:
-                if message.original_xml not in seen_xml:
-                    evidence_xml_snippets.append(message.original_xml)
-                    seen_xml.add(message.original_xml)
-        
         # Build prompt with dynamic chunk reduction to fit within character limit
         instructions = (
             "You are a professional investigator. Answer the question "
-            "based ONLY on the context below. If the answer is not in the context, say you don't know."
+            "based ONLY on the context below.\n\n"
+            "IMPORTANT: If the answer is not in the context, or if the evidence is not conclusive, "
+            "you MUST return 'UNKNOWN' and explain why (e.g., 'not in story', 'not conclusive', 'ambiguous')."
         )
         
         # Try to fit as many chunks as possible within the prompt limit
@@ -164,17 +157,31 @@ class NaiveRAGInvestigator(BaseInvestigator):
                     raise
                 continue
         
+        # CRITICAL: Collect evidence ONLY from chunks that were actually sent to LLM
+        # This ensures evidence matches what the LLM actually saw (assignment constraint)
+        evidence_xml_snippets = []
+        seen_xml = set()
+        
+        for chunk in chunks_to_use:  # Use chunks_to_use, NOT relevant_chunks
+            for message in chunk.messages:
+                if message.original_xml not in seen_xml:
+                    evidence_xml_snippets.append(message.original_xml)
+                    seen_xml.add(message.original_xml)
+        
         # Generate answer with the prompt that fits
+        logger.info(f"Sending prompt to LLM: {len(prompt)} characters (limit: 3000)")
         try:
             answer_text = self.llm_client.generate_answer(prompt)
         except Exception as e:
             return Answer(
                 answer_text=f"Error generating answer: {str(e)}",
+                evidence_ids=[],
                 evidence_xml_snippets=evidence_xml_snippets
             )
         
         return Answer(
             answer_text=answer_text,
+            evidence_ids=[],
             evidence_xml_snippets=evidence_xml_snippets
         )
 

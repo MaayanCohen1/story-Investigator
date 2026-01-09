@@ -16,7 +16,7 @@ from story_investigator.retrieval.embeddings import EmbeddingEngine
 from story_investigator.retrieval.vector_store import VectorStore
 
 logging.basicConfig(
-    level=logging.WARNING,  # Only show warnings and errors, not INFO logs
+    level=logging.INFO,  # Show INFO logs including prompt character counts
     format='%(levelname)s: %(message)s'
 )
 
@@ -46,7 +46,8 @@ async def main():
         await investigator.initialize()
     else:
         embedding_engine = EmbeddingEngine(model_name=config.embedding_model)
-        vector_store = VectorStore(dimension=384)
+        # OpenAI text-embedding-3-small has 1536 dimensions (not 384 like sentence-transformers)
+        vector_store = VectorStore(dimension=1536)
         chunker = MessageChunker(chunk_size=config.chunk_size, overlap=config.chunk_overlap)
         llm_client = LLMClient(
             api_key=config.openai_api_key,
@@ -62,7 +63,7 @@ async def main():
             chunker=chunker,
             prompt_manager=prompt_manager,
             llm_client=llm_client,
-            top_k=config.top_k,
+            top_k=5,  # Hardcoded to 5 to ensure prompt stays under 3000 chars (assignment constraint)
         )
 
     try:
@@ -94,21 +95,31 @@ async def main():
                 answer = await investigator.ask(question)
             else:
                 answer = investigator.ask(question)
-            print(answer.answer_text)
             
-            if answer.evidence_xml_snippets:
-                total_snippets = len(answer.evidence_xml_snippets)
-                max_display = 3
-                
-                print("\nHere are some of the lines that show it:")
-                for snippet in answer.evidence_xml_snippets[:max_display]:
-                    print(snippet)
-                
-                if total_snippets > max_display:
-                    remaining = total_snippets - max_display
-                    print(f"\n(... and {remaining} more snippets found)")
+            # Format output based on answer type
+            if answer.answer_text.upper() == "UNKNOWN":
+                # Unknown answer - show reason and closest evidence
+                print(f"I don't know. Reason: {answer.reason if answer.reason else 'not in story'}")
+                if answer.evidence_xml_snippets:
+                    print("\nHere are the closest lines found:")
+                    for snippet in answer.evidence_xml_snippets[:5]:
+                        print(snippet)
             else:
-                print("No evidence snippets available.")
+                # Definitive answer - show answer and evidence
+                print(f"{answer.answer_text}. Here are some of the lines that show it:")
+                
+                if answer.evidence_xml_snippets:
+                    total_snippets = len(answer.evidence_xml_snippets)
+                    max_display = 5
+                    
+                    for snippet in answer.evidence_xml_snippets[:max_display]:
+                        print(snippet)
+                    
+                    if total_snippets > max_display:
+                        remaining = total_snippets - max_display
+                        print(f"\n(... and {remaining} more snippets found)")
+                else:
+                    print("(No evidence snippets available)")
                 
         except PromptTooLongError:
             print("\nThe story context for this question is too long. Try being more specific.")
