@@ -8,6 +8,7 @@ import sys
 from story_investigator.config import load_config
 from story_investigator.engines.light_rag_engine import LightRAGInvestigator
 from story_investigator.engines.naive_rag import NaiveRAGInvestigator
+from story_investigator.engines.nano_graph_engine import NanoGraphInvestigator
 from story_investigator.errors import PromptTooLongError
 from story_investigator.llm_client import LLMClient
 from story_investigator.prompt_manager import PromptManager
@@ -32,8 +33,8 @@ async def main():
     prompt_manager = PromptManager(max_length=config.max_prompt_length)
 
     engine_choice = config.rag_engine.lower()
-    if engine_choice not in {"naive", "lightrag"}:
-        engine_choice = input("Choose engine [naive/lightrag] (default naive): ").strip().lower() or "naive"
+    if engine_choice not in {"naive", "lightrag", "nano"}:
+        engine_choice = input("Choose engine [naive/lightrag/nano] (default naive): ").strip().lower() or "naive"
 
     if engine_choice == "lightrag":
         investigator = LightRAGInvestigator(
@@ -43,6 +44,15 @@ async def main():
             llm_temperature=config.llm_temperature,
         )
         # Initialize LightRAG asynchronously
+        await investigator.initialize()
+    elif engine_choice == "nano":
+        investigator = NanoGraphInvestigator(
+            story_path=str(config.story_path),
+            prompt_manager=prompt_manager,
+            llm_model=config.llm_model,
+            llm_temperature=config.llm_temperature,
+        )
+        # Initialize NanoGraphRAG asynchronously
         await investigator.initialize()
     else:
         embedding_engine = EmbeddingEngine(model_name=config.embedding_model)
@@ -63,11 +73,11 @@ async def main():
             chunker=chunker,
             prompt_manager=prompt_manager,
             llm_client=llm_client,
-            top_k=5,  # Hardcoded to 5 to ensure prompt stays under 3000 chars (assignment constraint)
+            top_k=5,
         )
 
     try:
-        if engine_choice == "lightrag":
+        if engine_choice in ("lightrag", "nano"):
             await investigator.load_story(str(config.story_path))
         else:
             investigator.load_story(str(config.story_path))
@@ -91,7 +101,7 @@ async def main():
             continue
 
         try:
-            if engine_choice == "lightrag":
+            if engine_choice in ("lightrag", "nano"):
                 answer = await investigator.ask(question)
             else:
                 answer = investigator.ask(question)

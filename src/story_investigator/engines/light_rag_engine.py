@@ -3,17 +3,9 @@
 This engine uses LightRAG as a retriever (NOT for final answer generation),
 ensuring all prompts stay within the 3000 character limit.
 
-KNOWN BUG FIX (v1.1):
-The initial implementation had a critical bug where LightRAG's internal context
-truncation (from ~100K chars to ~2.7K chars) would drop the most relevant evidence
-BEFORE we could select it for the final prompt. This caused questions like
-"Who requested to bring the USB?" to fail even when the evidence existed.
-
-FIX: We now:
-1) Use smaller retrieval parameters (top_k=10, chunk_top_k=5) to reduce raw context size
-2) Extract candidate messages from the context BEFORE truncation
-3) Re-rank candidates by relevance using embedding similarity
-4) Select top evidence blocks that fit within the 3000-char budget
+The engine extracts candidate messages from retrieved context, re-ranks them
+by embedding similarity, and selects evidence blocks that fit within the 
+character budget.
 """
 
 import logging
@@ -60,8 +52,8 @@ class LightRAGInvestigator(BaseInvestigator):
         llm_model: str = "gpt-5-mini",
         llm_temperature: float = 0.0,
         working_dir: str = "./lightrag_db",
-        top_k: int = 10,  # Reduced from 60 to avoid over-retrieval
-        chunk_top_k: int = 5,  # Reduced from 20 to avoid over-retrieval
+        top_k: int = 10,
+        chunk_top_k: int = 5,
         embedding_model: str = "text-embedding-3-small",
     ):
         """Initialize LightRAG investigator.
@@ -75,7 +67,6 @@ class LightRAGInvestigator(BaseInvestigator):
             top_k: Number of top entities/relations to retrieve (default: 10).
             chunk_top_k: Number of top chunks to retrieve per entity (default: 5).
             embedding_model: OpenAI embedding model for reranking (default: text-embedding-3-small).
-                           MUST match LightRAG's embedding space for consistent ranking.
         """
         self.story_path = Path(story_path)
         self.prompt_manager = prompt_manager
@@ -92,7 +83,6 @@ class LightRAGInvestigator(BaseInvestigator):
         self._indexed = False
         
         # Initialize OpenAI embedding engine for reranking
-        # IMPORTANT: Uses same embedding space as LightRAG (openai_embed)
         self.embedding_engine = EmbeddingEngine(model_name=embedding_model)
         logger.info(f"Initialized embedding engine with model: {embedding_model}")
 
@@ -239,10 +229,8 @@ class LightRAGInvestigator(BaseInvestigator):
     def _rank_messages_by_embedding(self, question: str, messages: List[Message]) -> List[Tuple[float, Message]]:
         """Rank messages by OpenAI embedding similarity to question.
         
-        VERSION 3.0 (OpenAI Embeddings):
-        - Uses OpenAI text-embedding-3-small (same space as LightRAG indexing)
-        - NO hardcoded keyword lists or manual heuristics
-        - General-purpose semantic similarity
+        Uses OpenAI text-embedding-3-small for semantic similarity ranking
+        without hardcoded keywords or manual heuristics.
         
         Args:
             question: User's question.
@@ -303,14 +291,10 @@ class LightRAGInvestigator(BaseInvestigator):
         return None
     
     def _select_evidence_messages_with_ids(self, context: str, question: str, max_messages: int = 20) -> List[Message]:
-        """Select and rank evidence messages using OPENAI EMBEDDING SIMILARITY.
+        """Select and rank evidence messages using OpenAI embedding similarity.
         
-        VERSION 3.0 (OpenAI Embeddings - No Keywords):
-        - Ranks ALL messages by OpenAI embedding similarity to question
-        - Uses same embedding space as LightRAG (text-embedding-3-small)
-        - For investigative questions, includes response pairs
-        - Budget-aware selection (fits within prompt limit)
-        - NO hardcoded keyword lists
+        Ranks all messages by embedding similarity to the question. For investigative
+        questions, also includes response message pairs to provide complete context.
         
         Args:
             context: Retrieved context from LightRAG (unused in embedding-based approach).
@@ -366,10 +350,8 @@ class LightRAGInvestigator(BaseInvestigator):
     def _build_structured_prompt_with_ids(self, question: str, evidence_messages: List[Message]) -> str:
         """Build a structured prompt that enforces exact output format with message IDs.
         
-        VERSION 3.1 (Analytical Investigator):
-        - Includes investigative guidelines for chronological analysis
-        - Behavioral profiling and inconsistency detection
-        - Inference capabilities from behavioral changes
+        Includes investigative guidelines for chronological analysis, behavioral
+        profiling, and inconsistency detection.
         
         The prompt instructs the LLM to return:
         ANSWER: <name or UNKNOWN>

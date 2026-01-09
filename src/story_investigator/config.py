@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 class AppConfig:
     openai_api_key: str
     story_path: Path
-    rag_engine: str = "naive"  # naive or lightrag
+    rag_engine: str = "naive"  # naive, lightrag, or nano
     embedding_model: str = "text-embedding-3-small"  # OpenAI embedding model
     llm_model: str = "gpt-5-mini"  # OpenAI model for LightRAG entity extraction
     llm_temperature: float = 0.0

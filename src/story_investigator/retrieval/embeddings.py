@@ -172,7 +172,6 @@ class EmbeddingEngine:
                     time.sleep(delay)
                 else:
                     logger.error(f"Embedding failed after {self.max_retries} attempts")
-            
             except Exception as e:
                 # Non-retryable error
                 raise EmbeddingError(

@@ -157,12 +157,11 @@ class NaiveRAGInvestigator(BaseInvestigator):
                     raise
                 continue
         
-        # CRITICAL: Collect evidence ONLY from chunks that were actually sent to LLM
-        # This ensures evidence matches what the LLM actually saw (assignment constraint)
+        # Collect evidence from chunks that were sent to the LLM
         evidence_xml_snippets = []
         seen_xml = set()
         
-        for chunk in chunks_to_use:  # Use chunks_to_use, NOT relevant_chunks
+        for chunk in chunks_to_use:
             for message in chunk.messages:
                 if message.original_xml not in seen_xml:
                     evidence_xml_snippets.append(message.original_xml)
